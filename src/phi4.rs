@@ -4,6 +4,7 @@ use ndarray::{
 };
 use ort::environment::Environment;
 use ort::execution_providers::CPUExecutionProvider;
+use ort::execution_providers::CUDAExecutionProvider;
 use ort::execution_providers::CoreMLExecutionProvider;
 use ort::execution_providers::ExecutionProvider;
 use ort::session::builder::GraphOptimizationLevel;
@@ -65,8 +66,7 @@ impl Phi4MMProcessor {
     dbg!("QQQ");
     let text_session = SessionBuilder::new()?
       .with_execution_providers([
-        CUDAExecutionProvider::default().build()
-        // CPUExecutionProvider::default().build()
+        CUDAExecutionProvider::default().build(), // CPUExecutionProvider::default().build()
       ])?
       .with_optimization_level(GraphOptimizationLevel::Level3)?
       .commit_from_file(text_path)?;
@@ -202,7 +202,7 @@ impl Phi4MMProcessor {
   }
 
   /// Process text input to create token IDs
-  fn process_text(&self, text: &str) -> Result<Array1<i64>> {
+  fn process_text(&self, text: &str) -> Result<Array2<i64>> {
     // Tokenize the text
     let encoding = self
       .tokenizer
@@ -214,14 +214,15 @@ impl Phi4MMProcessor {
       .map(|&id| id as i64)
       .collect::<Vec<_>>();
 
-    // Convert to ndarray
-    Ok(Array1::from_vec(input_ids))
+    // Convert to 2D ndarray with batch size 1
+    let seq_len = input_ids.len();
+    Ok(Array2::from_shape_vec((1, seq_len), input_ids)?)
   }
 
   /// Run the combined embedding model to merge text, image, and audio inputs
   fn run_embedding_model(
     &self,
-    input_ids: Array1<i64>,
+    input_ids: Array2<i64>,
     image_features: Option<Array2<f32>>,
     audio_features: Option<Array2<f32>>,
   ) -> Result<Array2<f32>> {
@@ -410,7 +411,7 @@ impl Phi4MMProcessor {
     image: Option<&[u8]>,
     audio: Option<(&[f32], i32)>,
   ) -> Result<String> {
-    // Process text input
+    // Process text input - now returns a 2D array
     let input_ids = self.process_text(text)?;
 
     // Process image input if provided
@@ -443,9 +444,9 @@ impl Phi4MMProcessor {
       audio_features,
     )?;
 
-    // Create attention mask
+    // Create attention mask (a 2D tensor)
     let seq_len = inputs_embeds.shape()[1];
-    let attention_mask = Array2::ones((1, seq_len));
+    let attention_mask = Array2::<i64>::ones((1, seq_len));
 
     // Run the text model for generation
     let logits = self.run_text_model(
@@ -470,7 +471,7 @@ impl Phi4MMProcessor {
     let result = self
       .tokenizer
       .decode(&[highest_idx as u32], true)
-      .map_err(|e| anyhow!("Failed to encode: {}", e))?;
+      .map_err(|e| anyhow!("Failed to decode: {}", e))?;
 
     Ok(result)
   }
