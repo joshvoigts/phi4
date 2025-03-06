@@ -1,0 +1,13 @@
+[package]
+name = "phi4"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.96"
+ndarray = "0.16.1"
+ort = { version = "2.0.0-rc.9", features = ["coreml"] }
+ringbuf = "0.4.7"
+tokenizers = "0.21.0"
+tracing-subscriber = { version = "0.3", features = [ "env-filter", "fmt" ] }
+tract-onnx = "0.21.10"
