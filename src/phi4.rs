@@ -244,9 +244,9 @@ impl Phi4MMProcessor {
         features_tensor.into_dyn()
       }
       None => {
-        // Create empty f16 features with correct dimension
+        // Create empty f16 features with correct dimension of 3072
         let empty_features = Tensor::from_array(
-          Array2::<f16>::zeros((0, IMAGE_FEATURE_DIM)).into_dyn(),
+          Array2::<f16>::zeros((0, 3072)).into_dyn(),
         )?;
         empty_features.into_dyn()
       }
@@ -259,9 +259,9 @@ impl Phi4MMProcessor {
         features_tensor.into_dyn()
       }
       None => {
-        // Create empty f16 features with correct dimension
+        // Create empty f16 features with correct dimension of 3072
         let empty_features = Tensor::from_array(
-          Array2::<f16>::zeros((0, AUDIO_FEATURE_DIM)).into_dyn(),
+          Array2::<f16>::zeros((0, 3072)).into_dyn(),
         )?;
         empty_features.into_dyn()
       }
@@ -365,7 +365,7 @@ impl Phi4MMProcessor {
 
     let outputs = self.vision_session.run(inputs)?;
 
-    // Get the image features from the outputs
+    // Get the image features from the outputs - they should have 3072 features
     let image_features =
       outputs[0].try_extract_tensor::<f16>()?.view().to_owned();
 
@@ -403,7 +403,7 @@ impl Phi4MMProcessor {
 
     let outputs = self.speech_session.run(inputs)?;
 
-    // Get the audio features from the outputs as f16
+    // Get the audio features from the outputs with the correct 3072 dimension
     let audio_features =
       outputs[0].try_extract_tensor::<f16>()?.view().to_owned();
 
