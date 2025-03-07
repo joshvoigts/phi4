@@ -1,14 +1,12 @@
-use anyhow::{anyhow, Context, Result};
-use half::{bf16, f16};
-use ndarray::{
-  s, Array, Array1, Array2, Array3, Array4, Axis, IxDyn,
-};
+use anyhow::{anyhow, Result};
+use half::f16;
+use ndarray::{s, Array, Array1, Array2, Array3, Array4, Axis};
 use ort::environment::Environment;
 use ort::execution_providers::CUDAExecutionProvider;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::builder::SessionBuilder;
 use ort::session::Session;
-use ort::tensor::TensorElementType;
+use ort::value::TensorValueType;
 use ort::value::{Tensor, Value};
 use std::path::Path;
 use std::sync::Arc;
@@ -289,7 +287,7 @@ impl Phi4MMProcessor {
   fn create_empty_past_key_values(
     &self,
     batch_size: usize,
-  ) -> Result<Vec<(String, Value)>> {
+  ) -> Result<Vec<(String, Value<TensorValueType<f16>>)>> {
     let mut past_kv_inputs = Vec::with_capacity(64); // 32 keys + 32 values
 
     for i in 0..32 {
@@ -298,7 +296,7 @@ impl Phi4MMProcessor {
       let past_key_tensor = Tensor::from_array(past_key.into_dyn())?;
       past_kv_inputs.push((
         format!("past_key_values.{}.key", i),
-        past_key_tensor.into_dyn(),
+        past_key_tensor,
       ));
 
       // Create empty value tensor [batch_size, 8, 0, 128]
@@ -307,7 +305,7 @@ impl Phi4MMProcessor {
         Tensor::from_array(past_value.into_dyn())?;
       past_kv_inputs.push((
         format!("past_key_values.{}.value", i),
-        past_value_tensor.into_dyn(),
+        past_value_tensor,
       ));
     }
 
@@ -320,28 +318,32 @@ impl Phi4MMProcessor {
     inputs_embeds: Array2<f16>,
     attention_mask: Option<Array2<i64>>,
     input_mode: InputMode,
-    past_key_values: Option<Vec<(String, Value)>>,
-  ) -> Result<(Array2<f32>, Vec<(String, Value)>)> {
+    past_key_values: Option<
+      Vec<(String, Value<TensorValueType<f16>>)>,
+    >,
+  ) -> Result<(Array2<f32>, Vec<(String, Value<TensorValueType<f16>>)>)>
+  {
     let batch_size = inputs_embeds.shape()[0];
     let seq_len = inputs_embeds.shape()[1];
 
-    // Prepare attention mask if provided
-    let attention_mask_value = match attention_mask {
+    // Prepare attention mask if provided and convert to f16
+    let mask_f16 = match attention_mask {
       Some(mask) => {
-        // Keep as i64 based on session info
-        Value::from_array(mask.into_dyn())?
+        // Convert i64 mask to f16
+        mask.mapv(|x| f16::from_f32(x as f32))
       }
       None => {
-        // Create a default attention mask (all ones) with i64 type
-        let mask = Array2::<i64>::ones((batch_size, seq_len));
-        Value::from_array(mask.into_dyn())?
+        // Create a default attention mask with f16 type
+        Array2::<f16>::ones((batch_size, seq_len))
       }
     };
+    let attention_mask_tensor =
+      Tensor::from_array(mask_f16.clone().into_dyn())?;
 
-    // Create position_ids tensor
-    let position_ids = if let Some(_) = &past_key_values {
+    // Create position_ids tensor and convert to f16
+    let position_ids_i64 = if let Some(_) = &past_key_values {
       // For subsequent runs with past kv, position_ids are just the current position
-      let past_seq_len = attention_mask_value.shape()?[1] - 1;
+      let past_seq_len = mask_f16.shape()[1] - 1;
       Array2::<i64>::from_shape_fn((batch_size, 1), |(_, _)| {
         past_seq_len as i64
       })
@@ -351,8 +353,10 @@ impl Phi4MMProcessor {
         i as i64
       })
     };
-    let position_ids_value =
-      Value::from_array(position_ids.into_dyn())?;
+    let position_ids =
+      position_ids_i64.mapv(|x| f16::from_f32(x as f32));
+    let position_ids_tensor =
+      Tensor::from_array(position_ids.into_dyn())?;
 
     // Get past key values or create empty ones for the initial call
     let past_kv_inputs = past_key_values.unwrap_or_else(|| {
@@ -364,11 +368,10 @@ impl Phi4MMProcessor {
     // Reshape inputs_embeds to 3D (batch_size, seq_len, hidden_size)
     let inputs_embeds_3d = if let Some(_) = &past_key_values {
       // For subsequent runs, we only need the last token
-      let last_token =
-        inputs_embeds
-          .slice(s![.., -1..])
-          .to_owned()
-          .into_shape_with_order((batch_size, 1, 3072))?;
+      let last_token = inputs_embeds
+        .slice(s![.., -1..])
+        .to_owned() // Convert the view to owned
+        .into_shape_with_order((batch_size, 1, 3072))?;
       last_token
     } else {
       // For first run, use the full sequence
@@ -376,18 +379,21 @@ impl Phi4MMProcessor {
         .into_shape_with_order((batch_size, seq_len, 3072))?
     };
 
-    // Build all inputs
-    let mut inputs = vec![
-      (
-        "inputs_embeds",
-        Value::from_array(inputs_embeds_3d.into_dyn())?,
-      ),
-      ("attention_mask", attention_mask_value),
-      ("position_ids", position_ids_value),
-    ];
+    // Create tensor for inputs with the correct type
+    let inputs_embeds_tensor =
+      Tensor::from_array(inputs_embeds_3d.into_dyn())?;
 
-    // Add past key values
-    inputs.extend(past_kv_inputs);
+    // Build all inputs
+    let mut inputs = Vec::new();
+    inputs.push(("inputs_embeds".to_string(), inputs_embeds_tensor));
+    inputs
+      .push(("attention_mask".to_string(), attention_mask_tensor));
+    inputs.push(("position_ids".to_string(), position_ids_tensor));
+
+    // Add past key values - we need to convert String to &str
+    for (key, value) in past_kv_inputs {
+      inputs.push((key, value));
+    }
 
     // Run the text model
     let outputs = self.text_session.run(inputs)?;
@@ -413,19 +419,21 @@ impl Phi4MMProcessor {
       let value_idx = i * 2 + 2;
 
       if key_idx < outputs.len() && value_idx < outputs.len() {
-        // Extract the tensors and create new Values
+        // Extract the tensors and create new Values with specific type
         let key_tensor =
           outputs[key_idx].try_extract_tensor::<f16>()?;
-        present_key_values.push((
-          format!("past_key_values.{}.key", i),
-          Value::from_array(key_tensor.view().into_dyn())?,
-        ));
+        let key_value =
+          Tensor::from_array(key_tensor.view().into_dyn())?;
+        present_key_values
+          .push((format!("past_key_values.{}.key", i), key_value));
 
         let value_tensor =
           outputs[value_idx].try_extract_tensor::<f16>()?;
+        let value_value =
+          Tensor::from_array(value_tensor.view().into_dyn())?;
         present_key_values.push((
           format!("past_key_values.{}.value", i),
-          Value::from_array(value_tensor.view().into_dyn())?,
+          value_value,
         ));
       }
     }
@@ -564,6 +572,7 @@ impl Phi4MMProcessor {
     for _ in 0..max_new_tokens {
       // Get the next token ID (from the last position)
       let next_token_logits = logits.slice(s![0, -1, ..]);
+
       let mut next_token_id = 0;
       let mut max_logit = f32::NEG_INFINITY;
 
