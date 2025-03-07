@@ -1091,6 +1091,7 @@ name = "phi4"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "half",
  "ndarray",
  "ort",
  "ringbuf",

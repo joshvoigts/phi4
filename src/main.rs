@@ -1,6 +1,4 @@
 use anyhow::Result;
-use ort::environment::Environment;
-use std::sync::Arc;
 
 mod phi4;
 

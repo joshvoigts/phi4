@@ -1,15 +1,14 @@
 use anyhow::{anyhow, Context, Result};
+use half::{bf16, f16}; // Add this import for f16 support
 use ndarray::{
   s, Array, Array1, Array2, Array3, Array4, Axis, IxDyn,
 };
 use ort::environment::Environment;
-use ort::execution_providers::CPUExecutionProvider;
 use ort::execution_providers::CUDAExecutionProvider;
-use ort::execution_providers::CoreMLExecutionProvider;
-use ort::execution_providers::ExecutionProvider;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::builder::SessionBuilder;
 use ort::session::Session;
+use ort::tensor::TensorElementType;
 use ort::value::{Tensor, Value};
 use std::path::Path;
 use std::sync::Arc;
@@ -63,10 +62,9 @@ impl Phi4MMProcessor {
       .with_optimization_level(GraphOptimizationLevel::Level3)?
       .commit_from_file(embedding_path)?;
 
-    dbg!("QQQ");
     let text_session = SessionBuilder::new()?
       .with_execution_providers([
-        CUDAExecutionProvider::default().build(), // CPUExecutionProvider::default().build()
+        CUDAExecutionProvider::default().build()
       ])?
       .with_optimization_level(GraphOptimizationLevel::Level3)?
       .commit_from_file(text_path)?;
@@ -85,50 +83,60 @@ impl Phi4MMProcessor {
     })
   }
 
+  /// Convert f32 array to f16 array
+  fn convert_to_f16<D>(&self, arr: Array<f32, D>) -> Array<f16, D>
+  where
+    D: ndarray::Dimension,
+  {
+    arr.mapv(|x| f16::from_f32(x))
+  }
+
+  /// Convert f16 array to f32 array
+  fn convert_to_f32<D>(&self, arr: Array<f16, D>) -> Array<f32, D>
+  where
+    D: ndarray::Dimension,
+  {
+    arr.mapv(|x| x.to_f32())
+  }
+
   /// Process image input for the vision model
   fn process_image(
     &self,
     image: &[u8],
   ) -> Result<(Value, Value, Value)> {
-    // This would need to preprocess the image according to the requirements of Phi-4's vision model
-    // For simplicity, this is a placeholder
-    // In a real implementation, we'd need to:
-    // 1. Load and resize the image
-    // 2. Normalize the pixel values
-    // 3. Create the necessary tensors
-    // 4. Create the attention mask
-
-    // Example code for creating placeholder tensors
+    // Create image input tensor (batch_size, max_num_crops, channels, height, width)
     let batch_size = 1;
     let max_num_crops = 5; // Adjust based on your needs
     let channels = 3;
     let height = 448;
     let width = 448;
 
-    // Create image input tensor (batch_size, max_num_crops, channels, height, width)
-    let pixel_values = Array::<f32, _>::zeros((
+    // Create f32 arrays first
+    let pixel_values_f32 = Array::<f32, _>::zeros((
       batch_size,
       max_num_crops,
       channels,
       height,
       width,
     ));
-    // In a real implementation, we'd fill this with the actual image data
-
-    // Create attention mask - in a real implementation this would be based on the actual image content
-    let attention_mask =
+    let attention_mask_f32 =
       Array::<f32, _>::ones((batch_size, max_num_crops, 32, 32));
 
-    // Create image sizes - in a real implementation this would be the actual sizes
+    // Convert to f16
+    let pixel_values_f16 = self.convert_to_f16(pixel_values_f32);
+    let attention_mask_f16 = self.convert_to_f16(attention_mask_f32);
+
+    // Create image sizes - This remains i64
     let image_sizes = Array::<i64, _>::from_shape_vec(
       (batch_size, 2),
       vec![height as i64, width as i64],
     )?;
 
+    // Create tensors with explicit type
     let pixel_values_tensor =
-      Tensor::from_array(pixel_values.into_dyn())?;
+      Tensor::from_array(pixel_values_f16.into_dyn())?;
     let attention_mask_tensor =
-      Tensor::from_array(attention_mask.into_dyn())?;
+      Tensor::from_array(attention_mask_f16.into_dyn())?;
     let image_sizes_tensor =
       Tensor::from_array(image_sizes.into_dyn())?;
 
@@ -137,11 +145,7 @@ impl Phi4MMProcessor {
     let attention_mask_value = attention_mask_tensor.into_dyn();
     let image_sizes_value = image_sizes_tensor.into_dyn();
 
-    Ok((
-      pixel_values_value,
-      attention_mask_value,
-      image_sizes_value.into(),
-    ))
+    Ok((pixel_values_value, attention_mask_value, image_sizes_value))
   }
 
   /// Process audio input for the speech model
@@ -150,36 +154,32 @@ impl Phi4MMProcessor {
     audio_data: &[f32],
     sample_rate: i32,
   ) -> Result<(Value, Value, Value, Value)> {
-    // This would need to preprocess the audio according to the requirements of Phi-4's speech model
-    // For simplicity, this is a placeholder
-    // In a real implementation, we'd need to:
-    // 1. Extract the audio features (mel spectrograms)
-    // 2. Create the necessary tensors
-    // 3. Create the attention mask
-
     // Example code for creating placeholder tensors
     let batch_size = 1;
     let num_frames = 128; // Adjust based on your needs
     let feature_size = 80; // Mel spectrogram features
 
-    // Create audio input tensor (batch_size, num_frames, feature_size)
-    let audio_embeds =
+    // Create audio input tensor (batch_size, num_frames, feature_size) in f32
+    let audio_embeds_f32 =
       Array::<f32, _>::zeros((batch_size, num_frames, feature_size));
-    // In a real implementation, we'd fill this with the actual audio features
 
-    // Create audio attention mask
+    // Convert to f16
+    let audio_embeds_f16 = self.convert_to_f16(audio_embeds_f32);
+
+    // Create audio attention mask (remains as i64)
     let audio_attention_mask =
       Array::<i64, _>::ones((batch_size, num_frames));
 
-    // Create audio embed sizes
+    // Create audio embed sizes (remains as i64)
     let audio_embed_sizes =
       Array::from_shape_vec((batch_size,), vec![num_frames as i64])?;
 
     // Create input mode - always Speech for this function
     let input_mode = Array::from_elem((), InputMode::Speech as i64);
 
+    // Create tensors
     let audio_embeds_tensor =
-      Tensor::from_array(audio_embeds.into_dyn())?;
+      Tensor::from_array(audio_embeds_f16.into_dyn())?;
     let audio_attention_mask_tensor =
       Tensor::from_array(audio_attention_mask.into_dyn())?;
     let audio_embed_sizes_tensor =
@@ -196,8 +196,8 @@ impl Phi4MMProcessor {
     Ok((
       audio_embeds_value,
       audio_attention_mask_value,
-      audio_embed_sizes_value.into(),
-      input_mode_value.into(),
+      audio_embed_sizes_value,
+      input_mode_value,
     ))
   }
 
@@ -223,9 +223,9 @@ impl Phi4MMProcessor {
   fn run_embedding_model(
     &self,
     input_ids: Array2<i64>,
-    image_features: Option<Array2<f32>>,
-    audio_features: Option<Array2<f32>>,
-  ) -> Result<Array2<f32>> {
+    image_features: Option<Array2<f16>>,
+    audio_features: Option<Array2<f16>>,
+  ) -> Result<Array2<f16>> {
     // Prepare inputs for the embedding model
     let input_ids_tensor = Tensor::from_array(input_ids.into_dyn())?;
     let input_ids_value = input_ids_tensor.into_dyn();
@@ -237,8 +237,9 @@ impl Phi4MMProcessor {
         features_tensor.into_dyn()
       }
       None => {
+        // Create empty f16 features
         let empty_features = Tensor::from_array(
-          Array2::<f32>::zeros((0, 1152)).into_dyn(),
+          Array2::<f16>::zeros((0, 1152)).into_dyn(),
         )?;
         empty_features.into_dyn()
       }
@@ -251,8 +252,9 @@ impl Phi4MMProcessor {
         features_tensor.into_dyn()
       }
       None => {
+        // Create empty f16 features
         let empty_features = Tensor::from_array(
-          Array2::<f32>::zeros((0, 3072)).into_dyn(),
+          Array2::<f16>::zeros((0, 3072)).into_dyn(),
         )?;
         empty_features.into_dyn()
       }
@@ -267,9 +269,9 @@ impl Phi4MMProcessor {
 
     let outputs = self.embedding_session.run(inputs)?;
 
-    // Get the inputs_embeds from the outputs
+    // Get the inputs_embeds from the outputs and convert to f16
     let inputs_embeds =
-      outputs[0].try_extract_tensor::<f32>()?.view().to_owned();
+      outputs[0].try_extract_tensor::<f16>()?.view().to_owned();
 
     // Convert from dynamic shape to fixed shape
     let shape = inputs_embeds.shape();
@@ -284,28 +286,29 @@ impl Phi4MMProcessor {
   /// Run the text model (language model) for generation
   fn run_text_model(
     &self,
-    inputs_embeds: Array2<f32>,
+    inputs_embeds: Array2<f16>,
     attention_mask: Option<Array2<i64>>,
     input_mode: InputMode,
   ) -> Result<Array2<f32>> {
     // Prepare attention mask if provided
     let attention_mask_value = match attention_mask {
       Some(mask) => {
-        // Convert i64 to f32
-        let mask_f32 = mask.mapv(|x| x as f32);
-        Value::from_array(mask_f32.into_dyn())?
+        // Convert i64 to f16
+        let mask_f16 = mask.mapv(|x| f16::from_f32(x as f32));
+        Value::from_array(mask_f16.into_dyn())?
       }
       None => {
-        // Create a default attention mask (all ones) with f32 type
+        // Create a default attention mask (all ones) with f16 type
         let seq_len = inputs_embeds.shape()[1];
-        let mask = Array2::<f32>::ones((1, seq_len));
+        let mask = Array2::<f16>::ones((1, seq_len));
         Value::from_array(mask.into_dyn())?
       }
     };
 
-    // Create input mode tensor
+    // Create input mode tensor (convert to f16)
+    let input_mode_f16 = f16::from_f32(input_mode as i32 as f32);
     let input_mode_value = Value::from_array(
-      Array::from_elem((), input_mode as i32 as f32).into_dyn(),
+      Array::from_elem((), input_mode_f16).into_dyn(),
     )?;
 
     // Run the text model
@@ -321,14 +324,17 @@ impl Phi4MMProcessor {
     let outputs = self.text_session.run(inputs)?;
 
     // Get the logits from the outputs
-    let logits =
-      outputs[0].try_extract_tensor::<f32>()?.view().to_owned();
+    let logits_f16 =
+      outputs[0].try_extract_tensor::<f16>()?.view().to_owned();
+
+    // Convert logits from f16 to f32
+    let logits_f32 = self.convert_to_f32(logits_f16);
 
     // Convert from dynamic shape to fixed shape
-    let shape = logits.shape();
+    let shape = logits_f32.shape();
     let logits_2d = Array2::from_shape_vec(
       (shape[0], shape[1]),
-      logits.iter().cloned().collect(),
+      logits_f32.iter().cloned().collect(),
     )?;
 
     Ok(logits_2d)
@@ -338,7 +344,7 @@ impl Phi4MMProcessor {
   fn get_image_embeddings(
     &self,
     image: &[u8],
-  ) -> Result<Array2<f32>> {
+  ) -> Result<Array2<f16>> {
     // Process the image
     let (pixel_values, attention_mask, image_sizes) =
       self.process_image(image)?;
@@ -354,7 +360,7 @@ impl Phi4MMProcessor {
 
     // Get the image features from the outputs
     let image_features =
-      outputs[0].try_extract_tensor::<f32>()?.view().to_owned();
+      outputs[0].try_extract_tensor::<f16>()?.view().to_owned();
 
     // Convert from dynamic shape to fixed shape
     let shape = image_features.shape();
@@ -371,7 +377,7 @@ impl Phi4MMProcessor {
     &self,
     audio_data: &[f32],
     sample_rate: i32,
-  ) -> Result<Array2<f32>> {
+  ) -> Result<Array2<f16>> {
     // Process the audio
     let (
       audio_embeds,
@@ -390,9 +396,9 @@ impl Phi4MMProcessor {
 
     let outputs = self.speech_session.run(inputs)?;
 
-    // Get the audio features from the outputs
+    // Get the audio features from the outputs as f16
     let audio_features =
-      outputs[0].try_extract_tensor::<f32>()?.view().to_owned();
+      outputs[0].try_extract_tensor::<f16>()?.view().to_owned();
 
     // Convert from dynamic shape to fixed shape
     let shape = audio_features.shape();
