@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use half::{bf16, f16}; // Add this import for f16 support
+use half::{bf16, f16};
 use ndarray::{
   s, Array, Array1, Array2, Array3, Array4, Axis, IxDyn,
 };
@@ -13,6 +13,10 @@ use ort::value::{Tensor, Value};
 use std::path::Path;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
+
+// Constants for feature dimensions
+const IMAGE_FEATURE_DIM: usize = 3072; // Updated based on the error message
+const AUDIO_FEATURE_DIM: usize = 3072; // Using the same value for consistency
 
 enum InputMode {
   Language = 0,
@@ -106,7 +110,7 @@ impl Phi4MMProcessor {
   ) -> Result<(Value, Value, Value)> {
     // Create image input tensor (batch_size, max_num_crops, channels, height, width)
     let batch_size = 1;
-    let max_num_crops = 5; // Adjust based on your needs
+    let max_num_crops = 1; // Reduced from 5 to 1 to simplify
     let channels = 3;
     let height = 448;
     let width = 448;
@@ -119,8 +123,11 @@ impl Phi4MMProcessor {
       height,
       width,
     ));
+
+    // For attention mask, use a shape compatible with the model
+    // This might need adjustment based on model requirements
     let attention_mask_f32 =
-      Array::<f32, _>::ones((batch_size, max_num_crops, 32, 32));
+      Array::<f32, _>::ones((batch_size, max_num_crops));
 
     // Convert to f16
     let pixel_values_f16 = self.convert_to_f16(pixel_values_f32);
@@ -237,9 +244,9 @@ impl Phi4MMProcessor {
         features_tensor.into_dyn()
       }
       None => {
-        // Create empty f16 features
+        // Create empty f16 features with correct dimension
         let empty_features = Tensor::from_array(
-          Array2::<f16>::zeros((0, 1152)).into_dyn(),
+          Array2::<f16>::zeros((0, IMAGE_FEATURE_DIM)).into_dyn(),
         )?;
         empty_features.into_dyn()
       }
@@ -252,9 +259,9 @@ impl Phi4MMProcessor {
         features_tensor.into_dyn()
       }
       None => {
-        // Create empty f16 features
+        // Create empty f16 features with correct dimension
         let empty_features = Tensor::from_array(
-          Array2::<f16>::zeros((0, 3072)).into_dyn(),
+          Array2::<f16>::zeros((0, AUDIO_FEATURE_DIM)).into_dyn(),
         )?;
         empty_features.into_dyn()
       }
