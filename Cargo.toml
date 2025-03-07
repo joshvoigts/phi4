@@ -7,7 +7,7 @@ edition = "2021"
 anyhow = "1.0.96"
 half = "2.4.1"
 ndarray = "0.16.1"
-ort = { version = "2.0.0-rc.9", features = ["coreml"] }
+ort = { version = "2.0.0-rc.9", features = ["cuda", "half"] }
 ringbuf = "0.4.7"
 tokenizers = "0.21.0"
 tracing-subscriber = { version = "0.3", features = [ "env-filter", "fmt" ] }
