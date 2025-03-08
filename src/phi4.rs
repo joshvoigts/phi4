@@ -330,22 +330,60 @@ impl Phi4MMProcessor {
     let batch_size = inputs_embeds.shape()[0];
     let seq_len = inputs_embeds.shape()[1];
 
-    // Prepare attention mask if provided
+    // Prepare attention mask with correct dimension
     let attention_mask_tensor = match attention_mask {
       Some(mask) => Tensor::from_array(mask.into_dyn())?,
       None => {
-        // Create a default attention mask
-        let default_mask = Array2::<i64>::ones((batch_size, seq_len));
+        // Create a default attention mask with proper shape
+        let past_len = if let Some(pkv) = &past_key_values {
+          // Try to extract past sequence length from the first key value
+          if let Some((_, value)) = pkv.get(0) {
+            if let Ok(tensor) = value.try_extract_tensor::<f16>() {
+              let view = tensor.view();
+              if view.ndim() == 4 {
+                view.shape()[2] // Get past sequence length from dimension
+              } else {
+                0
+              }
+            } else {
+              0
+            }
+          } else {
+            0
+          }
+        } else {
+          0
+        };
+
+        let total_seq_len = past_len + seq_len;
+        let mut default_mask =
+          Array2::<i64>::ones((batch_size, total_seq_len));
         Tensor::from_array(default_mask.into_dyn())?
       }
     };
 
     // Create position_ids tensor
-    let position_ids = if let Some(_) = &past_key_values {
-      // For subsequent runs with past kv, position_ids are just the current position
-      let past_seq_len = seq_len - 1;
-      Array2::<i64>::from_shape_fn((batch_size, 1), |(_, _)| {
-        past_seq_len as i64
+    let position_ids = if let Some(pkv) = &past_key_values {
+      // For subsequent runs, position_ids should start where previous sequence ended
+      // Try to determine past sequence length
+      let past_seq_len = if let Some((_, value)) = pkv.get(0) {
+        if let Ok(tensor) = value.try_extract_tensor::<f16>() {
+          let view = tensor.view();
+          if view.ndim() == 4 {
+            view.shape()[2] // Get past sequence length from dimension
+          } else {
+            0
+          }
+        } else {
+          0
+        }
+      } else {
+        0
+      };
+
+      // Create position IDs starting from past_seq_len
+      Array2::<i64>::from_shape_fn((batch_size, seq_len), |(_, i)| {
+        (past_seq_len + i) as i64
       })
     } else {
       // For first run, position_ids are 0 to seq_len-1
@@ -401,12 +439,6 @@ impl Phi4MMProcessor {
         ));
       }
     }
-
-    // Debug the input names we're providing
-    dbg!(
-      "Input names being provided:",
-      inputs.iter().map(|(name, _)| name).collect::<Vec<_>>()
-    );
 
     // Run the model with error handling
     let outputs = match self.text_session.run(inputs) {
