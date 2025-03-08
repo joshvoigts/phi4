@@ -325,9 +325,8 @@ impl Phi4MMProcessor {
     &self,
     inputs_embeds: Array3<f16>,
     attention_mask: Option<Array2<i64>>,
-    past_key_values: Option<Vec<(String, Value)>>, // Generic Value type
+    past_key_values: Option<Vec<(String, Value)>>,
   ) -> Result<(Array2<f32>, Vec<(String, Value)>)> {
-    // Generic Value type in return
     let batch_size = inputs_embeds.shape()[0];
     let seq_len = inputs_embeds.shape()[1];
 
@@ -358,19 +357,10 @@ impl Phi4MMProcessor {
       Tensor::from_array(position_ids.into_dyn())?;
 
     // Handle inputs_embeds
-    let inputs_embeds_3d = if let Some(_) = &past_key_values {
-      // For subsequent runs, we only need the last token
-      inputs_embeds.slice(s![.., -1.., ..]).to_owned()
-    } else {
-      // For first run, use the full sequence
-      inputs_embeds
-    };
-
-    // Create tensor for inputs
     let inputs_embeds_tensor =
-      Tensor::from_array(inputs_embeds_3d.into_dyn())?;
+      Tensor::from_array(inputs_embeds.into_dyn())?;
 
-    // Build all inputs using the generic Value type
+    // Build all inputs
     let mut inputs = Vec::new();
     inputs.push((
       "inputs_embeds".to_string(),
@@ -383,27 +373,52 @@ impl Phi4MMProcessor {
     inputs
       .push(("position_ids".to_string(), position_ids_tensor.into()));
 
+    // Add past key values with CORRECT dimensions
     if let Some(pkv) = past_key_values {
       for (key, value) in pkv {
         inputs.push((key, value));
       }
     } else {
-      let empty_kv = self
-        .create_empty_past_key_values(batch_size)
-        .unwrap_or_default();
+      // Create empty tensors for past key values with correct dimensions
+      // The model expects 8 heads and 128 head dimension
+      for i in 0..32 {
+        // For key - shape: [batch_size, 8, past_sequence_length, 128]
+        let empty_key = Array4::<f16>::zeros((batch_size, 8, 0, 128));
+        let key_tensor = Tensor::from_array(empty_key.into_dyn())?;
+        inputs.push((
+          format!("past_key_values.{}.key", i),
+          key_tensor.into(),
+        ));
 
-      for (key, value) in empty_kv {
-        inputs.push((key, value.into()));
+        // For value - shape: [batch_size, 8, past_sequence_length, 128]
+        let empty_value =
+          Array4::<f16>::zeros((batch_size, 8, 0, 128));
+        let value_tensor =
+          Tensor::from_array(empty_value.into_dyn())?;
+        inputs.push((
+          format!("past_key_values.{}.value", i),
+          value_value.into(),
+        ));
       }
     }
 
-    let input_names: Vec<_> = self.text_session.inputs.iter()
-      .map(|input| &input.name)
-      .collect();
-    dbg!(input_names);
+    // Debug the input names we're providing
+    dbg!(
+      "Input names being provided:",
+      inputs.iter().map(|(name, _)| name).collect::<Vec<_>>()
+    );
 
-    // Run the text model
-    let outputs = self.text_session.run(inputs)?;
+    // Run the model with error handling
+    let outputs = match self.text_session.run(inputs) {
+      Ok(output) => output,
+      Err(e) => {
+        dbg!("Error running text model: ", e.to_string());
+        return Err(anyhow::anyhow!(
+          "Text model execution failed: {}",
+          e
+        ));
+      }
+    };
 
     // Get the logits from the outputs
     let logits_f16 =
