@@ -336,62 +336,37 @@ impl Phi4MMProcessor {
       None => {
         // Create a default attention mask with proper shape
         let past_len = if let Some(pkv) = &past_key_values {
-          let mut past_len = 0;
-
-          // Look specifically for key tensors
-          for (key, value) in pkv {
-            if key.contains(".key") {
-              if let Ok(tensor) = value.try_extract_tensor::<f16>() {
-                let view = tensor.view();
-                if view.ndim() == 4 {
-                  past_len = view.shape()[2];
-                  break;
-                }
+          // Try to extract past sequence length from the first key value
+          if let Some((_, value)) = pkv.get(0) {
+            if let Ok(tensor) = value.try_extract_tensor::<f16>() {
+              let view = tensor.view();
+              if view.ndim() == 4 {
+                view.shape()[2] // Get past sequence length from dimension
+              } else {
+                0
               }
+            } else {
+              0
             }
-          }
-
-          past_len
-        } else {
-          0
-        };
-
-        let total_seq_len = past_len + seq_len;
-        let mut default_mask =
-          Array2::<i64>::ones((batch_size, total_seq_len));
-        Tensor::from_array(default_mask.into_dyn())?
-      }
-    };
-
-    // Create position_ids tensor
-    let position_ids = if let Some(pkv) = &past_key_values {
-      // For subsequent runs, position_ids should start where previous sequence ended
-      // Try to determine past sequence length
-      let past_seq_len = if let Some((_, value)) = pkv.get(0) {
-        if let Ok(tensor) = value.try_extract_tensor::<f16>() {
-          let view = tensor.view();
-          if view.ndim() == 4 {
-            view.shape()[2] // Get past sequence length from dimension
           } else {
             0
           }
         } else {
           0
-        }
-      } else {
-        0
-      };
+        };
 
-      // Create position IDs starting from past_seq_len
-      Array2::<i64>::from_shape_fn((batch_size, seq_len), |(_, i)| {
-        (past_seq_len + i) as i64
-      })
-    } else {
-      // For first run, position_ids are 0 to seq_len-1
-      Array2::<i64>::from_shape_fn((batch_size, seq_len), |(_, i)| {
-        i as i64
-      })
+        let total_seq_len = past_len + seq_len;
+        let default_mask =
+          Array2::<i64>::ones((batch_size, total_seq_len));
+        Tensor::from_array(default_mask.into_dyn())?
+      }
     };
+
+    // Create position_ids tensor - simplified version
+    let position_ids = Array2::<i64>::from_shape_fn(
+      (batch_size, seq_len),
+      |(_, i)| i as i64,
+    );
     let position_ids_tensor =
       Tensor::from_array(position_ids.into_dyn())?;
 
@@ -418,20 +393,19 @@ impl Phi4MMProcessor {
         inputs.push((key, value));
       }
     } else {
-      // Create empty tensors for past key values with correct dimensions
-      // The model expects 8 heads and 128 head dimension
+      // Create empty tensors for past key values with a minimum dimension of 1
       for i in 0..32 {
-        // For key - shape: [batch_size, 8, past_sequence_length, 128]
-        let empty_key = Array4::<f16>::zeros((batch_size, 8, 0, 128));
+        // For key - shape: [batch_size, 8, 1, 128]
+        let empty_key = Array4::<f16>::zeros((batch_size, 8, 1, 128));
         let key_tensor = Tensor::from_array(empty_key.into_dyn())?;
         inputs.push((
           format!("past_key_values.{}.key", i),
           key_tensor.into(),
         ));
 
-        // For value - shape: [batch_size, 8, past_sequence_length, 128]
+        // For value - shape: [batch_size, 8, 1, 128]
         let empty_value =
-          Array4::<f16>::zeros((batch_size, 8, 0, 128));
+          Array4::<f16>::zeros((batch_size, 8, 1, 128));
         let value_tensor =
           Tensor::from_array(empty_value.into_dyn())?;
         inputs.push((
@@ -441,10 +415,20 @@ impl Phi4MMProcessor {
       }
     }
 
-    for (idx, (name, value)) in inputs.iter().enumerate() {
+    // Debug the input shapes
+    for (name, value) in &inputs {
       if let Ok(tensor) = value.try_extract_tensor::<f16>() {
-        let shape = tensor.shape();
-        dbg!(idx, name, shape);
+        eprintln!(
+          "Input {}: shape = {:?}",
+          name,
+          tensor.view().shape()
+        );
+      } else if let Ok(tensor) = value.try_extract_tensor::<i64>() {
+        eprintln!(
+          "Input {}: shape = {:?}",
+          name,
+          tensor.view().shape()
+        );
       }
     }
 
