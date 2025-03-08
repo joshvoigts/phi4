@@ -397,6 +397,11 @@ impl Phi4MMProcessor {
       }
     }
 
+    let input_names: Vec<_> = self.text_session.inputs.iter()
+      .map(|input| &input.name)
+      .collect();
+    dbg!(input_names);
+
     // Run the text model
     let outputs = self.text_session.run(inputs)?;
 
