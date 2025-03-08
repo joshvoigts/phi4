@@ -67,9 +67,13 @@ impl Phi4MMProcessor {
       .with_optimization_level(GraphOptimizationLevel::Level3)?
       .commit_from_file(text_path)?;
 
+    dbg!("Loaded models");
+
     // Load the tokenizer
     let tokenizer = Tokenizer::from_file(tokenizer_path)
       .map_err(|e| anyhow!("Failed to load tokenizer: {}", e))?;
+
+    dbg!("Loaded tokenizer");
 
     Ok(Self {
       vision_session,
@@ -521,6 +525,7 @@ impl Phi4MMProcessor {
     audio: Option<(&[f32], i32)>,
     max_new_tokens: usize,
   ) -> Result<String> {
+    dbg!("Processing text");
     // Process text input
     let input_ids = self.process_text(text)?;
 
@@ -548,6 +553,7 @@ impl Phi4MMProcessor {
       };
 
     // Run the embedding model
+    dbg!("Running embedding model");
     let inputs_embeds = self.run_embedding_model(
       input_ids.clone(),
       image_features,
@@ -559,6 +565,7 @@ impl Phi4MMProcessor {
     let mut attention_mask = Array2::<i64>::ones((1, seq_len));
 
     // Initial run of the text model without past key values
+    dbg!("Running text model initial run");
     let (mut logits, mut past_key_values) = self.run_text_model(
       inputs_embeds,
       Some(attention_mask.clone()),
