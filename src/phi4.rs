@@ -397,7 +397,7 @@ impl Phi4MMProcessor {
           Tensor::from_array(empty_value.into_dyn())?;
         inputs.push((
           format!("past_key_values.{}.value", i),
-          value_value.into(),
+          value_tensor.into(),
         ));
       }
     }
