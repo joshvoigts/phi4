@@ -323,7 +323,7 @@ impl Phi4MMProcessor {
   /// Run the text model (language model) for generation
   fn run_text_model(
     &self,
-    inputs_embeds: Array2<f16>,
+    inputs_embeds: Array3<f16>,
     attention_mask: Option<Array2<i64>>,
     past_key_values: Option<
       Vec<(String, Value<TensorValueType<f16>>)>,
@@ -365,21 +365,16 @@ impl Phi4MMProcessor {
     let position_ids_tensor =
       Tensor::from_array(position_ids.into_dyn())?;
 
-    // Reshape inputs_embeds to 3D (batch_size, seq_len, hidden_size)
+    // Handle inputs_embeds - already a 3D array (batch_size, seq_len, hidden_size)
     let inputs_embeds_3d = if let Some(_) = &past_key_values {
       // For subsequent runs, we only need the last token
-      let last_token = inputs_embeds
-        .slice(s![.., -1..])
-        .to_owned() // Convert the view to owned
-        .into_shape_with_order((batch_size, 1, 3072))?;
-      last_token
+      inputs_embeds.slice(s![.., -1.., ..]).to_owned()
     } else {
       // For first run, use the full sequence
       inputs_embeds
-        .into_shape_with_order((batch_size, seq_len, 3072))?
     };
 
-    // Create tensor for inputs with the correct type
+    // Create tensor for inputs
     let inputs_embeds_tensor =
       Tensor::from_array(inputs_embeds_3d.into_dyn())?;
 
@@ -565,6 +560,7 @@ impl Phi4MMProcessor {
     )?;
 
     // Create attention mask for the initial sequence
+    // Use the second dimension (sequence length) from the 3D tensor
     let mut seq_len = inputs_embeds.shape()[1];
     let mut attention_mask = Array2::<i64>::ones((1, seq_len));
 
