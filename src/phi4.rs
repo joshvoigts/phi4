@@ -317,7 +317,6 @@ impl Phi4MMProcessor {
     &self,
     inputs_embeds: Array2<f16>,
     attention_mask: Option<Array2<i64>>,
-    input_mode: InputMode,
     past_key_values: Option<
       Vec<(String, Value<TensorValueType<f16>>)>,
     >,
@@ -358,13 +357,6 @@ impl Phi4MMProcessor {
     let position_ids_tensor =
       Tensor::from_array(position_ids.into_dyn())?;
 
-    // Get past key values or create empty ones for the initial call
-    let past_kv_inputs = past_key_values.unwrap_or_else(|| {
-      self
-        .create_empty_past_key_values(batch_size)
-        .unwrap_or_default()
-    });
-
     // Reshape inputs_embeds to 3D (batch_size, seq_len, hidden_size)
     let inputs_embeds_3d = if let Some(_) = &past_key_values {
       // For subsequent runs, we only need the last token
@@ -390,9 +382,18 @@ impl Phi4MMProcessor {
       .push(("attention_mask".to_string(), attention_mask_tensor));
     inputs.push(("position_ids".to_string(), position_ids_tensor));
 
-    // Add past key values - we need to convert String to &str
-    for (key, value) in past_kv_inputs {
-      inputs.push((key, value));
+    if let Some(pkv) = past_key_values {
+      for (key, value) in pkv {
+        inputs.push((key, value));
+      }
+    } else {
+      let empty_kv = self
+        .create_empty_past_key_values(batch_size)
+        .unwrap_or_default();
+
+      for (key, value) in empty_kv {
+        inputs.push((key, value));
+      }
     }
 
     // Run the text model
@@ -561,7 +562,6 @@ impl Phi4MMProcessor {
     let (mut logits, mut past_key_values) = self.run_text_model(
       inputs_embeds,
       Some(attention_mask.clone()),
-      input_mode,
       None,
     )?;
 
@@ -571,7 +571,7 @@ impl Phi4MMProcessor {
     // Generate tokens one at a time
     for _ in 0..max_new_tokens {
       // Get the next token ID (from the last position)
-      let next_token_logits = logits.slice(s![0, -1, ..]);
+      let next_token_logits = logits.slice(s![-1, ..]);
 
       let mut next_token_id = 0;
       let mut max_logit = f32::NEG_INFINITY;
@@ -610,7 +610,6 @@ impl Phi4MMProcessor {
       let (new_logits, new_past_key_values) = self.run_text_model(
         next_token_embeds,
         Some(attention_mask.clone()),
-        input_mode,
         Some(past_key_values),
       )?;
 
