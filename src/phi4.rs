@@ -229,7 +229,7 @@ impl Phi4MMProcessor {
     input_ids: Array2<i64>,
     image_features: Option<Array2<f16>>,
     audio_features: Option<Array2<f16>>,
-  ) -> Result<Array2<f16>> {
+  ) -> Result<Array3<f16>> {
     // Prepare inputs for the embedding model
     let input_ids_tensor = Tensor::from_array(input_ids.into_dyn())?;
     let input_ids_value = input_ids_tensor.into_dyn();
@@ -271,7 +271,11 @@ impl Phi4MMProcessor {
       ("audio_features", audio_features_value),
     ];
 
+    dbg!("Starting embedding");
+
     let outputs = self.embedding_session.run(inputs)?;
+
+    dbg!("Finished embedding");
 
     // Get the inputs_embeds from the outputs
     let inputs_embeds =
@@ -279,12 +283,12 @@ impl Phi4MMProcessor {
 
     // Convert from dynamic shape to fixed shape
     let shape = inputs_embeds.shape();
-    let inputs_embeds_2d = Array2::from_shape_vec(
-      (shape[0], shape[1]),
+    let inputs_embeds_3d = Array3::from_shape_vec(
+      (shape[0], shape[1], shape[2]),
       inputs_embeds.iter().cloned().collect(),
     )?;
 
-    Ok(inputs_embeds_2d)
+    Ok(inputs_embeds_3d)
   }
 
   /// Create empty past key/value tensors for the text model's initial call
