@@ -336,21 +336,22 @@ impl Phi4MMProcessor {
       None => {
         // Create a default attention mask with proper shape
         let past_len = if let Some(pkv) = &past_key_values {
-          // Try to extract past sequence length from the first key value
-          if let Some((_, value)) = pkv.get(0) {
-            if let Ok(tensor) = value.try_extract_tensor::<f16>() {
-              let view = tensor.view();
-              if view.ndim() == 4 {
-                view.shape()[2] // Get past sequence length from dimension
-              } else {
-                0
+          let mut past_len = 0;
+
+          // Look specifically for key tensors
+          for (key, value) in pkv {
+            if key.contains(".key") {
+              if let Ok(tensor) = value.try_extract_tensor::<f16>() {
+                let view = tensor.view();
+                if view.ndim() == 4 {
+                  past_len = view.shape()[2];
+                  break;
+                }
               }
-            } else {
-              0
             }
-          } else {
-            0
           }
+
+          past_len
         } else {
           0
         };
@@ -440,6 +441,13 @@ impl Phi4MMProcessor {
       }
     }
 
+    for (idx, (name, value)) in inputs.iter().enumerate() {
+      if let Ok(tensor) = value.try_extract_tensor::<f16>() {
+        let shape = tensor.shape();
+        dbg!(idx, name, shape);
+      }
+    }
+
     // Run the model with error handling
     let outputs = match self.text_session.run(inputs) {
       Ok(output) => output,
@@ -451,6 +459,8 @@ impl Phi4MMProcessor {
         ));
       }
     };
+
+    dbg!("Finished running text_session");
 
     // Get the logits from the outputs
     let logits_f16 =
