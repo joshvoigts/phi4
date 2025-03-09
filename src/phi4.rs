@@ -375,7 +375,7 @@ impl Phi4MMProcessor {
       Tensor::from_array(inputs_embeds.into_dyn())?;
 
     // Build all inputs
-    let mut inputs = Vec::new();
+    let mut inputs: Vec<(String, Value)> = Vec::new();
     inputs.push((
       "inputs_embeds".to_string(),
       inputs_embeds_tensor.into(),
@@ -387,33 +387,33 @@ impl Phi4MMProcessor {
     inputs
       .push(("position_ids".to_string(), position_ids_tensor.into()));
 
-    // Add past key values with CORRECT dimensions
-    if let Some(pkv) = past_key_values {
-      for (key, value) in pkv {
-        inputs.push((key, value));
-      }
-    } else {
-      // Create empty tensors for past key values with a minimum dimension of 1
-      for i in 0..32 {
-        // For key - shape: [batch_size, 8, 1, 128]
-        let empty_key = Array4::<f16>::zeros((batch_size, 8, 1, 128));
-        let key_tensor = Tensor::from_array(empty_key.into_dyn())?;
-        inputs.push((
-          format!("past_key_values.{}.key", i),
-          key_tensor.into(),
-        ));
-
-        // For value - shape: [batch_size, 8, 1, 128]
-        let empty_value =
-          Array4::<f16>::zeros((batch_size, 8, 1, 128));
-        let value_tensor =
-          Tensor::from_array(empty_value.into_dyn())?;
-        inputs.push((
-          format!("past_key_values.{}.value", i),
-          value_tensor.into(),
-        ));
-      }
-    }
+    // // Add past key values with CORRECT dimensions
+    // if let Some(pkv) = past_key_values {
+    //   for (key, value) in pkv {
+    //     inputs.push((key, value));
+    //   }
+    // } else {
+    //   // Create empty tensors for past key values with a minimum dimension of 1
+    //   for i in 0..32 {
+    //     // For key - shape: [batch_size, 8, 1, 128]
+    //     let empty_key = Array4::<f16>::zeros((batch_size, 8, 1, 128));
+    //     let key_tensor = Tensor::from_array(empty_key.into_dyn())?;
+    //     inputs.push((
+    //       format!("past_key_values.{}.key", i),
+    //       key_tensor.into(),
+    //     ));
+    //
+    //     // For value - shape: [batch_size, 8, 1, 128]
+    //     let empty_value =
+    //       Array4::<f16>::zeros((batch_size, 8, 1, 128));
+    //     let value_tensor =
+    //       Tensor::from_array(empty_value.into_dyn())?;
+    //     inputs.push((
+    //       format!("past_key_values.{}.value", i),
+    //       value_tensor.into(),
+    //     ));
+    //   }
+    // }
 
     // Debug the input shapes
     for (name, value) in &inputs {
